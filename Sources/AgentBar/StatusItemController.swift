@@ -15,6 +15,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var statusPreferences: StatusBarPreferences
     private var launchAtLoginEnabled = false
     private var displayMode: StatusBarDisplayMode
+    private var statusItemWidth: CGFloat?
     private var isRefreshing = false
     private var errorMessage: String?
     private var proxyMenuText: String
@@ -38,7 +39,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         self.proxyMenuText = proxyMenuText
         self.displayMode = displayMode
         super.init()
-        item.length = reservedStatusItemWidth
         render(display: currentDisplay)
         item.menu = makeMenu()
     }
@@ -88,7 +88,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func setStatusPreferences(_ preferences: StatusBarPreferences) {
         statusPreferences = preferences
-        item.length = reservedStatusItemWidth
+        statusItemWidth = nil
         render(display: currentDisplay)
         item.menu = makeMenu()
     }
@@ -97,14 +97,26 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard let button = item.button else { return }
         let title = statusTitle(display: display)
         if title.length == 0 {
+            statusItemWidth = nil
+            item.length = NSStatusItem.squareLength
             button.attributedTitle = NSAttributedString(string: "")
             button.title = ""
             button.image = NSApp.applicationIconImage
             button.imagePosition = .imageOnly
         } else {
+            let renderedTitle = NSMutableAttributedString(attributedString: title)
+            renderedTitle.addAttribute(
+                .font,
+                value: NSFont.systemFont(ofSize: 13),
+                range: NSRange(location: 0, length: renderedTitle.length)
+            )
+            let measuredWidth = ceil(renderedTitle.size().width)
+            statusItemWidth = max(statusItemWidth ?? 0, measuredWidth)
+            item.length = max(NSStatusItem.squareLength, statusItemWidth ?? measuredWidth)
             button.image = nil
             button.imagePosition = .noImage
-            button.attributedTitle = title
+            button.alignment = .left
+            button.attributedTitle = renderedTitle
         }
         button.toolTip = display.tooltip
         button.setAccessibilityLabel(display.tooltip)
@@ -167,7 +179,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let title = NSMutableAttributedString()
         if codexGroup.length > 0 { title.append(codexGroup) }
         if deepSeekGroup.length > 0 {
-            if title.length > 0 { title.append(separator(" ｜ ")) }
+            if title.length > 0 { title.append(separator("｜")) }
             title.append(deepSeekGroup)
         }
         return title
@@ -189,37 +201,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private var menuContentWidth: CGFloat {
         max(MenuLayout.minimumWidth, ceil(item.length))
-    }
-
-    /// Reserve width from the configured elements, not the current numbers.
-    /// Percentages and balances change digits over time; a fixed reservation keeps
-    /// the status item from crossing the notch/menu-bar visibility threshold.
-    private var reservedStatusItemWidth: CGFloat {
-        let font = NSFont.systemFont(ofSize: 13)
-        let textWidth: (String) -> CGFloat = { text in
-            ceil((text as NSString).size(withAttributes: [.font: font]).width)
-        }
-        let separatorWidth = textWidth(" · ")
-        var groups: [CGFloat] = []
-
-        var codexWidth: CGFloat = 0
-        if statusPreferences.showCodexRing {
-            let ringItemWidth = { (label: String) in
-                CGFloat(14) + textWidth(" ") + textWidth(label)
-            }
-            codexWidth = ringItemWidth(statusPreferences.showCodexQuota ? "5h 100%" : "5h")
-                + separatorWidth
-                + ringItemWidth(statusPreferences.showCodexQuota ? "7d 100%" : "7d")
-        } else if statusPreferences.showCodexQuota {
-            codexWidth = textWidth("5h 100% · 7d 100%")
-        }
-        if codexWidth > 0 { groups.append(codexWidth) }
-        if statusPreferences.showDeepSeekBalance {
-            groups.append(textWidth("¥9999.99"))
-        }
-
-        let groupsWidth = groups.reduce(0, +) + (groups.count > 1 ? textWidth(" ｜ ") : 0)
-        return max(NSStatusItem.squareLength, groupsWidth + 16)
     }
 
     private func makeMenu() -> NSMenu {
