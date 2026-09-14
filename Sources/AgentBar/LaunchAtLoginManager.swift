@@ -53,6 +53,6 @@ actor LaunchAtLoginManager {
             (allowNotFound && error.localizedCaseInsensitiveContains("could not find")) {
             return
         }
-        throw NSError(domain: "CodexQuotaMenu.LaunchAtLogin", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: error])
+        throw NSError(domain: "AgentBar.LaunchAtLogin", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: error])
     }
 }

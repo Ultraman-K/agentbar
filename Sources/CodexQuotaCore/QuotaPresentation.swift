@@ -35,6 +35,7 @@ public struct QuotaDisplay: Equatable, Sendable {
     public let detailStatusText: String?
     public let retryText: String?
     public let usesMutedQuotaColors: Bool
+    public let resetCredits: RateLimitResetCredits?
 }
 
 public enum QuotaPresentation {
@@ -59,7 +60,7 @@ public enum QuotaPresentation {
         let snapshot = result.snapshot
         guard let snapshot else {
             let status = unavailableText(for: result.failureReason)
-            return .init(menuText: "5h -- | 7d --", tooltip: status, sourceText: "数据源不可用", isStale: true, cards: [], state: result.state, detailStatusText: status, retryText: retryText(result.nextRetryAt, now: now), usesMutedQuotaColors: true)
+            return .init(menuText: "5h -- | 7d --", tooltip: status, sourceText: "数据源不可用", isStale: true, cards: [], state: result.state, detailStatusText: status, retryText: retryText(result.nextRetryAt, now: now), usesMutedQuotaColors: true, resetCredits: nil)
         }
 
         let fiveHour = metric(window: snapshot.fiveHour, label: "5h")
@@ -86,8 +87,19 @@ public enum QuotaPresentation {
             state: result.state,
             detailStatusText: detailStatus(result, snapshot: snapshot, now: now, timeZone: timeZone),
             retryText: retryText(result.nextRetryAt, now: now),
-            usesMutedQuotaColors: usesMutedQuotaColors
+            usesMutedQuotaColors: usesMutedQuotaColors,
+            resetCredits: snapshot.resetCredits
         )
+    }
+
+    public static func resetSummary(_ credits: RateLimitResetCredits?, now: Date = .now, timeZone: TimeZone = .current) -> (count: Int, nearestExpiry: String?)? {
+        guard let credits, credits.availableCount > 0 else { return nil }
+        let nearest = credits.credits?
+            .filter { $0.status == "available" }
+            .compactMap(\.expiresAt)
+            .min()
+            .map { format($0, now: now, timeZone: timeZone) }
+        return (credits.availableCount, nearest)
     }
 
     private static func detailStatus(_ result: QuotaRefreshResult, snapshot: QuotaSnapshot, now: Date, timeZone: TimeZone) -> String? {
@@ -140,7 +152,7 @@ public enum QuotaPresentation {
 
     private static func card(window: QuotaWindow?, title: String, now: Date, timeZone: TimeZone, usesMutedColors: Bool) -> QuotaCardDisplay? {
         guard let window else { return nil }
-        let resetText = window.resetsAt.map { "\(formatCardReset($0, now: now, timeZone: timeZone)) 重置" } ?? "重置时间未知"
+        let resetText = window.resetsAt.map { "\(format($0, now: now, timeZone: timeZone)) 重置" } ?? "重置时间未知"
         return .init(title: title, resetText: resetText, remainingPercent: window.remainingPercent, alert: window.alert, usesMutedColors: usesMutedColors)
     }
 
@@ -151,16 +163,6 @@ public enum QuotaPresentation {
         formatter.timeZone = timeZone
         formatter.locale = .current
         formatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "'今天' HH:mm" : "M月d日 HH:mm"
-        return formatter.string(from: date)
-    }
-
-    private static func formatCardReset(_ date: Date, now: Date, timeZone: TimeZone) -> String {
-        var calendar = Calendar.current
-        calendar.timeZone = timeZone
-        let formatter = DateFormatter()
-        formatter.timeZone = timeZone
-        formatter.locale = .current
-        formatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "HH:mm" : "M月d日 HH:mm"
         return formatter.string(from: date)
     }
 

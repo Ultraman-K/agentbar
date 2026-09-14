@@ -6,7 +6,8 @@ if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--purge" ) ]]; then
   exit 2
 fi
 
-BIN="$HOME/Library/Application Support/CodexQuotaMenu/bin/codex-quota-menu"
+BIN="$HOME/Library/Application Support/CodexQuotaMenu/bin/agentbar"
+LEGACY_BIN="$HOME/Library/Application Support/CodexQuotaMenu/bin/codex-quota-menu"
 PLIST="$HOME/Library/LaunchAgents/com.codex.quota-menu.plist"
 LABEL="com.codex.quota-menu"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,14 +15,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 /bin/launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
 
-for pid in $(pgrep -f "$BIN" 2>/dev/null || true); do
+for pid in $(pgrep -f "$BIN" 2>/dev/null || true) $(pgrep -f "$LEGACY_BIN" 2>/dev/null || true); do
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  if [[ "$command" == "$BIN"* ]]; then
+  if [[ "$command" == "$BIN"* || "$command" == "$LEGACY_BIN"* ]]; then
     kill "$pid" 2>/dev/null || true
   fi
 done
 
 rm -f "$BIN"
+rm -f "$LEGACY_BIN"
+rm -rf "$HOME/Library/Application Support/CodexQuotaMenu/bin"/*_AgentBar.bundle
+rm -rf "$HOME/Library/Application Support/CodexQuotaMenu/bin"/*_CodexQuotaMenu.bundle
 rmdir "$HOME/Library/Application Support/CodexQuotaMenu/bin" 2>/dev/null || true
 
 if [[ "${1:-}" == "--purge" ]]; then
@@ -29,4 +33,4 @@ if [[ "${1:-}" == "--purge" ]]; then
   rm -rf "$ROOT/logs"
 fi
 
-print "Codex Quota Menu removed."
+print "AgentBar removed."

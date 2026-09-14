@@ -10,36 +10,55 @@ application.run()
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: RateLimitCoordinator?
+    private var deepSeekCoordinator: DeepSeekBalanceCoordinator?
     private var statusItem: StatusItemController?
     private var refreshTimer: Timer?
+    private var deepSeekTimer: Timer?
     private var consecutiveFailures = 0
     private var refreshTask: Task<Void, Never>?
+    private var deepSeekTask: Task<Void, Never>?
     private var updatesTask: Task<Void, Never>?
     private var launchAtLoginManager: LaunchAtLoginManager?
     private var launchAtLoginEnabled = false
     private var statusBarDisplayMode = StatusBarDisplayModePreference.load()
+    private var statusBarPreferences = StatusBarPreferences.load()
+    private var settingsWindow: SettingsWindowController?
+    private let deepSeekCredentialStore = DeepSeekCredentialStore()
+    private var wakeObserver: NSObjectProtocol?
     private let proxyStore = ProxyConfigurationStore()
     private var proxyConfiguration: ProxyConfiguration = .direct
     private var connectionGeneration = 0
+    private var deepSeekGeneration = 0
     private let logger = DiagnosticsLogger()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { await logger.log(level: .info, component: "app", message: "started") }
+        NSApp.mainMenu = AppMenu.makeMainMenu()
         let locator = CodexExecutableLocator()
         proxyConfiguration = proxyStore.load()
         coordinator = makeCoordinator()
+        deepSeekCoordinator = makeDeepSeekCoordinator()
         launchAtLoginManager = LaunchAtLoginManager(
             executableURL: URL(fileURLWithPath: CommandLine.arguments[0]),
             codexURL: locator.resolve()
         )
         statusItem = StatusItemController(
-            onRefresh: { [weak self] in self?.refresh() },
+            onRefresh: { [weak self] in self?.refreshAll() },
             onToggleLaunchAtLogin: { [weak self] in self?.toggleLaunchAtLogin() },
             onToggleCompactMode: { [weak self] in self?.toggleCompactMode() },
             onConfigureProxy: { [weak self] in self?.configureProxy() },
+            onOpenSettings: { [weak self] in self?.showSettings() },
             proxyMenuText: proxyConfiguration.menuText,
-            displayMode: statusBarDisplayMode
+            displayMode: statusBarDisplayMode,
+            statusPreferences: statusBarPreferences
         )
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshAll() }
+        }
         Task { [weak self] in
             let enabled = await self?.launchAtLoginManager?.isEnabled() ?? false
             await MainActor.run {
@@ -51,17 +70,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let coordinator = self.coordinator else { return }
             let cached = await coordinator.loadCachedSnapshot()
             if cached.snapshot != nil { self.statusItem?.render(result: cached) }
-            self.refresh()
+            if let deepSeekCoordinator = self.deepSeekCoordinator {
+                self.statusItem?.render(deepSeek: await deepSeekCoordinator.loadCachedSnapshot())
+            }
+            self.refreshAll()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         Task { await logger.log(level: .info, component: "app", message: "terminating") }
         refreshTimer?.invalidate()
+        deepSeekTimer?.invalidate()
         refreshTask?.cancel()
+        deepSeekTask?.cancel()
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         updatesTask?.cancel()
         guard let coordinator else { return }
         Task { await coordinator.stop() }
+    }
+
+    private func refreshAll() {
+        refresh()
+        refreshDeepSeek()
     }
 
     private func refresh() {
@@ -88,6 +118,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if result.state == .live, result.snapshot?.source == .appServer {
                     self?.startListeningForUpdates()
             }
+        }
+    }
+
+    private func refreshDeepSeek() {
+        guard deepSeekTask == nil, let coordinator = deepSeekCoordinator else { return }
+        let generation = deepSeekGeneration
+        deepSeekTask = Task { [weak self] in
+            defer {
+                if let self, self.deepSeekGeneration == generation {
+                    self.deepSeekTask = nil
+                    self.scheduleNextDeepSeekRefresh()
+                }
+            }
+            let result = await coordinator.refresh()
+            guard let self else { return }
+            guard self.deepSeekGeneration == generation else { return }
+            self.statusItem?.render(deepSeek: result)
+            if let error = result.error {
+                self.statusItem?.setError(error == .missingAPIKey ? nil : self.deepSeekErrorText(error))
+            }
+        }
+    }
+
+    private func scheduleNextDeepSeekRefresh() {
+        deepSeekTimer?.invalidate()
+        let interval = Double(DeepSeekRefreshSchedule.interval.components.seconds)
+        deepSeekTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.refreshDeepSeek() }
         }
     }
 
@@ -156,6 +214,128 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return RateLimitCoordinator(primary: primary, cache: FileQuotaCache(fileURL: cacheURL))
     }
 
+    private func deepSeekCacheURL() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appending(path: "Library/Application Support/CodexQuotaMenu/deepseek-balance-cache.json")
+    }
+
+    private func makeDeepSeekCoordinator() -> DeepSeekBalanceCoordinator {
+        let key = try? deepSeekCredentialStore.read()
+        return DeepSeekBalanceCoordinator(
+            provider: DeepSeekBalanceProvider(client: makeDeepSeekHTTPClient()),
+            cache: FileDeepSeekBalanceCache(fileURL: deepSeekCacheURL()),
+            apiKey: key ?? nil
+        )
+    }
+
+    private func makeDeepSeekHTTPClient() -> URLSessionDeepSeekHTTPClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        if proxyConfiguration.isCustom {
+            configuration.connectionProxyDictionary = [
+                kCFNetworkProxiesHTTPEnable as String: 1,
+                kCFNetworkProxiesHTTPProxy as String: proxyConfiguration.host,
+                kCFNetworkProxiesHTTPPort as String: proxyConfiguration.port,
+                kCFNetworkProxiesHTTPSEnable as String: 1,
+                kCFNetworkProxiesHTTPSProxy as String: proxyConfiguration.host,
+                kCFNetworkProxiesHTTPSPort as String: proxyConfiguration.port
+            ]
+        }
+        return URLSessionDeepSeekHTTPClient(session: URLSession(configuration: configuration))
+    }
+
+    private func showSettings(section: SettingsWindowController.Section = .general) {
+        if settingsWindow == nil {
+            let hasKey = (try? deepSeekCredentialStore.read()) != nil
+            settingsWindow = SettingsWindowController(
+                preferences: statusBarPreferences,
+                proxy: proxyConfiguration,
+                hasAPIKey: hasKey,
+                launchAtLogin: launchAtLoginEnabled,
+                onSave: { [weak self] draft in self?.applySettings(draft) },
+                onTestDeepSeek: { [weak self] key, completion in
+                    self?.testDeepSeek(key, completion: completion)
+                }
+            )
+        }
+        settingsWindow?.show(section: section)
+    }
+
+    private func applySettings(_ draft: SettingsDraft) {
+        statusBarPreferences = draft.statusPreferences
+        StatusBarPreferences.save(statusBarPreferences)
+        statusItem?.setStatusPreferences(statusBarPreferences)
+        if draft.launchAtLogin != launchAtLoginEnabled {
+            toggleLaunchAtLogin()
+        }
+        do {
+            let proxyChanged = draft.proxy != proxyConfiguration
+            deepSeekGeneration += 1
+            deepSeekTask?.cancel()
+            deepSeekTask = nil
+            deepSeekTimer?.invalidate()
+            if draft.removeAPIKey {
+                try deepSeekCredentialStore.remove()
+            } else if let key = draft.apiKey, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try deepSeekCredentialStore.save(key)
+            }
+            try proxyStore.save(draft.proxy)
+            proxyConfiguration = draft.proxy
+            statusItem?.setProxyMenuText(proxyConfiguration.menuText)
+            if proxyChanged {
+                restartConnectionForProxyChange()
+            } else {
+                deepSeekCoordinator = makeDeepSeekCoordinator()
+                refreshAll()
+            }
+        } catch {
+            statusItem?.setError("设置保存失败")
+        }
+    }
+
+    private func testDeepSeek(_ key: String, completion: @escaping (DeepSeekTestOutcome) -> Void) {
+        let provider = DeepSeekBalanceProvider()
+        Task { [weak self] in
+            do {
+                let snapshot = try await provider.fetch(apiKey: key)
+                self?.statusItem?.setError(nil)
+                completion(.success(Self.connectionSummary(snapshot)))
+            } catch {
+                let message = (error as? DeepSeekBalanceError).map(Self.connectionFailureText)
+                    ?? "连接失败，请检查网络或 API Key"
+                self?.statusItem?.setError(message)
+                completion(.failure(message))
+            }
+        }
+    }
+
+    private static func connectionSummary(_ snapshot: DeepSeekBalanceSnapshot) -> String {
+        guard let item = snapshot.cnyBalance ?? snapshot.balances.first else { return "连接正常" }
+        let amount = item.total.formatted(.number.precision(.fractionLength(2)))
+        return "连接正常 · \(item.currency) 余额 ¥\(amount)"
+    }
+
+    private static func connectionFailureText(_ error: DeepSeekBalanceError) -> String {
+        switch error {
+        case .missingAPIKey: "未提供 API Key"
+        case .invalidURL, .invalidResponse: "接口返回异常"
+        case .unauthorized: "API Key 无效（HTTP 401）"
+        case .rateLimited: "请求频繁，请稍后重试"
+        case .server: "DeepSeek 服务暂不可用"
+        case .decoding: "无法解析余额响应"
+        case .transport: "网络不可达，请检查代理"
+        }
+    }
+
+    private func deepSeekErrorText(_ error: DeepSeekBalanceError) -> String {
+        switch error {
+        case .missingAPIKey: return "DeepSeek 未配置 API Key"
+        case .unauthorized: return "DeepSeek API Key 无效"
+        case .rateLimited: return "DeepSeek 请求频繁，请稍后重试"
+        case .server: return "DeepSeek 服务暂不可用"
+        default: return "DeepSeek 暂时无法更新余额"
+        }
+    }
+
     private func configureProxy() {
         let alert = NSAlert()
         alert.messageText = "网络代理"
@@ -218,18 +398,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func restartConnectionForProxyChange() {
         connectionGeneration += 1
+        deepSeekGeneration += 1
         refreshTimer?.invalidate()
         refreshTimer = nil
+        deepSeekTimer?.invalidate()
+        deepSeekTimer = nil
         refreshTask?.cancel()
+        deepSeekTask?.cancel()
         updatesTask?.cancel()
         refreshTask = nil
+        deepSeekTask = nil
         updatesTask = nil
         let previousCoordinator = coordinator
+        let previousDeepSeekCoordinator = deepSeekCoordinator
         Task { @MainActor [weak self] in
             await previousCoordinator?.stop()
+            _ = previousDeepSeekCoordinator
             guard let self else { return }
             self.coordinator = self.makeCoordinator()
-            self.refresh()
+            self.deepSeekCoordinator = self.makeDeepSeekCoordinator()
+            self.refreshAll()
         }
     }
 

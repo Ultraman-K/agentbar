@@ -8,7 +8,7 @@ final class QuotaCardMenuItemView: NSView {
     init(cards: [QuotaCardDisplay], leadingInset: CGFloat) {
         rows = cards.map { QuotaCardRowView(card: $0, leadingInset: leadingInset) }
         let height = CGFloat(max(rows.count, 1)) * 92
-        super.init(frame: NSRect(x: 0, y: 0, width: 184, height: height))
+        super.init(frame: NSRect(x: 0, y: 0, width: MenuLayout.contentWidth, height: height))
         for row in rows {
             addSubview(row)
         }

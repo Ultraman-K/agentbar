@@ -2,15 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodexQuotaMenu",
+    name: "AgentBar",
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "CodexQuotaCore", targets: ["CodexQuotaCore"]),
-        .executable(name: "codex-quota-menu", targets: ["CodexQuotaMenu"])
+        .executable(name: "agentbar", targets: ["AgentBar"])
     ],
     targets: [
         .target(name: "CodexQuotaCore"),
-        .executableTarget(name: "CodexQuotaMenu", dependencies: ["CodexQuotaCore"]),
-        .testTarget(name: "CodexQuotaCoreTests", dependencies: ["CodexQuotaCore"])
+        .executableTarget(name: "AgentBar", dependencies: ["CodexQuotaCore"], resources: [.copy("Resources")])
     ]
 )

@@ -7,6 +7,30 @@ public enum QuotaAlert: String, Codable, Sendable { case normal, warning, danger
 public enum QuotaDisplayState: Equatable, Sendable { case live, refreshing, lastKnown, expired, unavailable }
 public enum QuotaFailureReason: Equatable, Sendable { case timeout, codexNotFound, notAuthenticated, processExited, protocolError, networkUnavailable, cacheUnreadable, unknown }
 
+public struct RateLimitResetCredit: Codable, Equatable, Sendable {
+    public let id: String
+    public let status: String
+    public let expiresAt: Date?
+    public let title: String?
+
+    public init(id: String, status: String = "unknown", expiresAt: Date?, title: String? = nil) {
+        self.id = id
+        self.status = status
+        self.expiresAt = expiresAt
+        self.title = title
+    }
+}
+
+public struct RateLimitResetCredits: Codable, Equatable, Sendable {
+    public let availableCount: Int
+    public let credits: [RateLimitResetCredit]?
+
+    public init(availableCount: Int, credits: [RateLimitResetCredit]? = nil) {
+        self.availableCount = max(0, availableCount)
+        self.credits = credits
+    }
+}
+
 public struct QuotaRefreshResult: Equatable, Sendable {
     public let snapshot: QuotaSnapshot?
     public let state: QuotaDisplayState
@@ -35,9 +59,11 @@ public struct RawQuotaWindow: Equatable, Sendable {
 public struct RawQuotaSnapshot: Equatable, Sendable {
     public let windows: [RawQuotaWindow]
     public let capturedAt: Date
-    public init(windows: [RawQuotaWindow], capturedAt: Date) {
+    public let resetCredits: RateLimitResetCredits?
+    public init(windows: [RawQuotaWindow], capturedAt: Date, resetCredits: RateLimitResetCredits? = nil) {
         self.windows = windows
         self.capturedAt = capturedAt
+        self.resetCredits = resetCredits
     }
 }
 
@@ -56,4 +82,21 @@ public struct QuotaSnapshot: Codable, Equatable, Sendable {
     public let source: QuotaSource
     public let freshness: QuotaFreshness
     public let updatedAt: Date
+    public let resetCredits: RateLimitResetCredits?
+
+    public init(
+        fiveHour: QuotaWindow?,
+        weekly: QuotaWindow?,
+        source: QuotaSource,
+        freshness: QuotaFreshness,
+        updatedAt: Date,
+        resetCredits: RateLimitResetCredits? = nil
+    ) {
+        self.fiveHour = fiveHour
+        self.weekly = weekly
+        self.source = source
+        self.freshness = freshness
+        self.updatedAt = updatedAt
+        self.resetCredits = resetCredits
+    }
 }

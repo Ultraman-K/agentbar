@@ -39,7 +39,8 @@ public enum QuotaNormalizer {
             weekly: make(.weekly, minutes: 10_080),
             source: source,
             freshness: freshness,
-            updatedAt: raw.capturedAt
+            updatedAt: raw.capturedAt,
+            resetCredits: raw.resetCredits
         )
     }
 }

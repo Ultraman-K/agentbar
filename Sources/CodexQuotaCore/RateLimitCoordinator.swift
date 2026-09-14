@@ -102,7 +102,8 @@ public actor RateLimitCoordinator {
             weekly: snapshot.weekly,
             source: source,
             freshness: freshness,
-            updatedAt: snapshot.updatedAt
+            updatedAt: snapshot.updatedAt,
+            resetCredits: snapshot.resetCredits
         )
     }
 

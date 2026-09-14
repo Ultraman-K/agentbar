@@ -53,6 +53,25 @@ public struct ProxyConfiguration: Codable, Equatable, Sendable {
     }
 }
 
+public enum ProxyConfigurationResolver {
+    public enum Resolution: Equatable, Sendable {
+        case resolved(ProxyConfiguration)
+        case invalid
+    }
+
+    /// Maps the settings form state to the proxy configuration to persist.
+    /// Direct connection always resolves to `.direct`; custom mode validates host and port.
+    public static func resolve(mode: ProxyMode, host: String, portText: String) -> Resolution {
+        guard mode == .custom else { return .resolved(.direct) }
+        let trimmedPort = portText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let port = Int(trimmedPort),
+              let configuration = try? ProxyConfiguration.custom(host: host, port: port) else {
+            return .invalid
+        }
+        return .resolved(configuration)
+    }
+}
+
 public struct ProxyConfigurationStore {
     private enum Key {
         static let mode = "CodexQuotaMenu.proxy.mode"

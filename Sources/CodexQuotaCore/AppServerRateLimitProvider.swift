@@ -15,6 +15,8 @@ public actor AppServerRateLimitProvider: RateLimitProvider {
     private var completed: [Int: AppServerDecodedMessage] = [:]
     private var terminalError: Error?
     private var latestWireSnapshot: AppServerWireSnapshot?
+    private var latestResetCredits: RateLimitResetCredits?
+    private var parameterizedRateLimitRead = true
     private var updateContinuation: AsyncThrowingStream<RawQuotaSnapshot, Error>.Continuation?
     private var requestDidTimeout = false
 
@@ -66,11 +68,28 @@ public actor AppServerRateLimitProvider: RateLimitProvider {
     }
 
     private func readQuota() async throws -> RawQuotaSnapshot {
-        let message = try await request(method: "account/rateLimits/read", params: nil)
+        let message: AppServerDecodedMessage
+        if parameterizedRateLimitRead {
+            let candidate = try await request(
+                method: "account/rateLimits/read",
+                params: ["supportsLunaReserve": true, "excludeResetCreditDetails": false]
+            )
+            if candidate.errorCode == -32600 || candidate.errorCode == -32602 {
+                parameterizedRateLimitRead = false
+                message = try await request(method: "account/rateLimits/read", params: nil)
+            } else {
+                message = candidate
+            }
+        } else {
+            message = try await request(method: "account/rateLimits/read", params: nil)
+        }
         try throwForMessageError(message)
         guard let snapshot = message.snapshot else { throw RateLimitProviderError.noQuotaData }
         latestWireSnapshot = snapshot
-        return snapshot.toRaw(capturedAt: now())
+        if let resetCredits = message.resetCredits {
+            latestResetCredits = resetCredits
+        }
+        return snapshot.toRaw(capturedAt: now(), resetCredits: latestResetCredits)
     }
 
     private func readQuotaWithRetry() async throws -> RawQuotaSnapshot {
@@ -124,6 +143,8 @@ public actor AppServerRateLimitProvider: RateLimitProvider {
         updateContinuation?.finish()
         updateContinuation = nil
         latestWireSnapshot = nil
+        latestResetCredits = nil
+        parameterizedRateLimitRead = true
         terminalError = nil
         started = false
         await transport.stop()
@@ -141,7 +162,7 @@ public actor AppServerRateLimitProvider: RateLimitProvider {
         let initialize = try await request(
             method: "initialize",
             params: [
-                "clientInfo": ["name": "codex-quota-menu", "version": "0.1.0"],
+                "clientInfo": ["name": "agentbar", "version": "1.0.4"],
                 "capabilities": ["experimentalApi": false]
             ]
         )
@@ -196,7 +217,7 @@ public actor AppServerRateLimitProvider: RateLimitProvider {
         guard message.method == "account/rateLimits/updated", let update = message.snapshot else { return }
         let merged = latestWireSnapshot.map { $0.mergingSparse(update) } ?? update
         latestWireSnapshot = merged
-        updateContinuation?.yield(merged.toRaw(capturedAt: now()))
+        updateContinuation?.yield(merged.toRaw(capturedAt: now(), resetCredits: latestResetCredits))
     }
 
     private func failPending(with error: Error) {
