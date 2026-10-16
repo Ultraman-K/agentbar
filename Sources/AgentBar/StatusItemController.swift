@@ -3,6 +3,9 @@ import CodexQuotaCore
 
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
+    /// How far the metric block's center sits above the title baseline. Matches the previous
+    /// single-ring layout (bounds `y: -2` + a 14pt image), so the ¥ balance stays centered.
+    private static let metricCenterAboveBaseline: CGFloat = 5
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let onRefresh: () -> Void
     private let onToggleLaunchAtLogin: () -> Void
@@ -137,36 +140,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         showCodexQuota: Bool,
         showDeepSeekBalance: Bool
     ) -> NSAttributedString {
-        let codexGroup = NSMutableAttributedString()
-        var codexParts: [NSAttributedString] = []
+        let codexGroup: NSAttributedString
         let cards = [
             display.cards.first(where: { $0.title == "5 小时使用限制" }),
             display.cards.first(where: { $0.title == "每周使用限额" })
         ]
         let labels = ["5h", "7d"]
-        if showCodexRing {
-            for index in cards.indices {
-                guard let card = cards[index] else { continue }
-                codexParts.append(metricText(showCodexQuota ? "\(labels[index]) \(card.remainingPercent)%" : labels[index], card: card, muted: display.isStale))
-            }
-        } else if showCodexQuota {
-            let values = cards.enumerated().compactMap { index, card in card.map { "\(labels[index]) \($0.remainingPercent)%" } }
-            if !values.isEmpty {
-                let combined = NSMutableAttributedString()
-                for (index, value) in values.enumerated() {
-                    if index > 0 { combined.append(separator(" · ")) }
-                    combined.append(NSAttributedString(string: value, attributes: [.foregroundColor: QuotaVisualColor.foreground(for: cards[index]?.alert)]))
-                }
-                codexParts.append(combined)
-            }
+        let rows = cards.enumerated().compactMap { index, card -> QuotaRingRenderer.MetricRow? in
+            guard let card, showCodexRing || showCodexQuota else { return nil }
+            return QuotaRingRenderer.MetricRow(
+                remainingPercent: showCodexRing ? card.remainingPercent : nil,
+                alert: card.alert,
+                text: showCodexQuota ? "\(labels[index]) \(card.remainingPercent)%" : labels[index]
+            )
         }
-        if !codexParts.isEmpty {
-            codexGroup.append(codexParts[0])
-            if codexParts.count > 1 {
-                codexGroup.append(separator(" · "))
-                codexGroup.append(codexParts[1])
-            }
-        }
+        codexGroup = rows.isEmpty ? NSAttributedString() : stackedMetrics(rows, muted: display.isStale, showsRing: showCodexRing)
         let deepSeekGroup = NSMutableAttributedString()
         if showDeepSeekBalance {
             if let balance = deepSeekSnapshot?.cnyBalance {
@@ -189,14 +177,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSAttributedString(string: text, attributes: [.foregroundColor: NSColor.secondaryLabelColor])
     }
 
-    private func metricText(_ text: String, card: QuotaCardDisplay?, muted: Bool) -> NSAttributedString {
-        let result = NSMutableAttributedString()
+    /// The rows share one image because a status bar button only renders a single line.
+    private func stackedMetrics(_ rows: [QuotaRingRenderer.MetricRow], muted: Bool, showsRing: Bool) -> NSAttributedString {
+        let image = QuotaRingRenderer.stackedImage(rows: rows, muted: muted, showsRing: showsRing)
         let attachment = NSTextAttachment()
-        attachment.image = QuotaRingRenderer.image(remainingPercent: card?.remainingPercent, alert: card?.alert, muted: muted)
-        attachment.bounds = NSRect(x: 0, y: -2, width: 14, height: 14)
-        result.append(NSAttributedString(attachment: attachment))
-        result.append(NSAttributedString(string: " \(text)", attributes: [.foregroundColor: muted ? NSColor.secondaryLabelColor : QuotaVisualColor.foreground(for: card?.alert)]))
-        return result
+        attachment.image = image
+        attachment.bounds = NSRect(
+            x: 0,
+            y: Self.metricCenterAboveBaseline - image.size.height / 2,
+            width: image.size.width,
+            height: image.size.height
+        )
+        return NSAttributedString(attachment: attachment)
     }
 
     private var menuContentWidth: CGFloat {
