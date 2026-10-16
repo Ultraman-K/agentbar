@@ -18,7 +18,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var statusPreferences: StatusBarPreferences
     private var launchAtLoginEnabled = false
     private var displayMode: StatusBarDisplayMode
-    private var statusItemWidth: CGFloat?
     private var isRefreshing = false
     private var errorMessage: String?
     private var proxyMenuText: String
@@ -91,7 +90,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func setStatusPreferences(_ preferences: StatusBarPreferences) {
         statusPreferences = preferences
-        statusItemWidth = nil
         render(display: currentDisplay)
         item.menu = makeMenu()
     }
@@ -100,7 +98,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard let button = item.button else { return }
         let title = statusTitle(display: display)
         if title.length == 0 {
-            statusItemWidth = nil
             item.length = NSStatusItem.squareLength
             button.attributedTitle = NSAttributedString(string: "")
             button.title = ""
@@ -110,12 +107,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             let renderedTitle = NSMutableAttributedString(attributedString: title)
             renderedTitle.addAttribute(
                 .font,
-                value: NSFont.systemFont(ofSize: 13),
+                value: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular),
                 range: NSRange(location: 0, length: renderedTitle.length)
             )
             let measuredWidth = ceil(renderedTitle.size().width)
-            statusItemWidth = max(statusItemWidth ?? 0, measuredWidth)
-            item.length = max(NSStatusItem.squareLength, statusItemWidth ?? measuredWidth)
+            item.length = max(NSStatusItem.squareLength, measuredWidth)
             button.image = nil
             button.imagePosition = .noImage
             button.alignment = .left
