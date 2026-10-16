@@ -162,7 +162,7 @@ public actor AppServerRateLimitProvider: RateLimitProvider {
         let initialize = try await request(
             method: "initialize",
             params: [
-                "clientInfo": ["name": "agentbar", "version": "1.0.4"],
+                "clientInfo": ["name": "agentbar", "version": "1.0.5"],
                 "capabilities": ["experimentalApi": false]
             ]
         )
